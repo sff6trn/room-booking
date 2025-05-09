@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Room Booking</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      text-align: center;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 150px repeat(22, 1fr);
+      gap: 2px;
+      margin: 20px auto;
+      max-width: 90vw;
+    }
+
+    .room-label,
+    .time-label,
+    .slot {
+      border: 1px solid #ccc;
+      text-align: center;
+      padding: 10px;
+      box-sizing: border-box;
+      font-size: 12px;
+    }
+
+    .room-label {
+      background: #f0f0f0;
+      font-weight: bold;
+    }
+
+    .available {
+      background: #a8e6a1;
+      cursor: pointer;
+    }
+
+    .selected {
+      background: #fff176;
+    }
+
+    .booked {
+      background: #333;
+      color: #fff;
+      cursor: pointer;
+    }
+
+    .past {
+      background: #ddd;
+      color: #999;
+      cursor: not-allowed;
+    }
+
+    .legend {
+      margin-top: 20px;
+    }
+
+    .legend div {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      margin: 0 5px;
+    }
+
+    #booking-form,
+    #unbooking-form {
+      display: none;
+      margin: 20px auto;
+      max-width: 300px;
+      text-align: left;
+    }
+
+    #booking-form input,
+    #unbooking-form input {
+      width: 100%;
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="auth-section" style="margin-bottom: 20px;">
+    <button id="sign-in-google">Sign in with Google</button>
+    <button id="sign-in-microsoft">Sign in with Microsoft</button>
+    <button id="sign-out" style="display: none;">Sign Out</button>
+    <span id="user-email" style="margin-left: 15px;"></span>
+  </div>
+
+  <div class="header">
+    <h1>Room Booking</h1>
+    <div id="clock"></div>
+  </div>
+
+  <div class="date-controls"
+    style="display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 10px; margin: 20px 0;">
+    <button onclick="changeDate(-1)">Previous Day</button>
+    <div id="custom-date-wrapper" style="cursor: pointer; display: inline-flex; align-items: center; gap: 5px;">
+      <label for="date-picker">Select a date:</label>
+      <input type="date" id="date-picker" />
+    </div>
+    <button onclick="changeDate(1)">Next Day</button>
+    <button onclick="goToToday()">Today</button>
+  </div>
+
+
+  <div id="app-container" style="display: none;">
+
+    <div class="grid" id="grid"></div>
+
+    <div id="booking-form">
+      <h3>Confirm Booking</h3>
+      <input type="text" id="fname" placeholder="First Name" readonly />
+      <input type="text" id="lname" placeholder="Last Name" readonly />
+      <input type="email" id="email" placeholder="Email" readonly />
+      <input type="text" id="reason" placeholder="Reason" />
+      <button onclick="submitBooking()">Submit</button>
+    </div>
+
+    <div id="unbooking-form">
+      <h3>Confirm Unbooking</h3>
+      <div id="unbooking-info"></div>
+      <button onclick="submitUnbooking()">Unbook</button>
+      <button onclick="cancelUnbooking()">Cancel</button>
+    </div>
+
+    <div class="legend">
+      <div style="background:#a8e6a1;"></div> Available
+      <div style="background:#fff176;"></div> Selected
+      <div style="background:orange;"></div> My Booking
+      <div style="background:#333;"></div> Booked
+      <div style="background:#ddd;"></div> Past
+    </div>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyAv2l6sulhI9Rq2P-TB1DXpUlrWIB2BUqE",
+      authDomain: "roombookinggrid.firebaseapp.com",
+      projectId: "roombookinggrid",
+      storageBucket: "roombookinggrid.firebasestorage.app",
+      messagingSenderId: "552235186164",
+      appId: "1:552235186164:web:ebb72b6bb33cbe35716ba1",
+      measurementId: "G-M2MV4ZEKZJ"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    async function checkIfAdmin(email) {
+      try {
+        const doc = await db.collection("roles").doc(email).get();
+        return doc.exists && doc.data().role === "admin";
+      } catch (error) {
+        console.error("Error checking admin role:", error);
+        return false;
+      }
+    }
+
+    let currentUser = null;
+
+    firebase.auth().onAuthStateChanged(async user => {
+      if (user) {
+        const domain = user.email.split("@")[1];
+        const allowedDomains = ["k12insight.com", "sogolytics.com", "zarca.com"];
+        document.getElementById("app-container").style.display = "block";
+
+        if (!allowedDomains.includes(domain)) {
+          alert("Access denied: unauthorized domain.");
+          firebase.auth().signOut();
+          return;
+        }
+
+        currentUser = user;
+
+        // ✅ Check if user is admin from Firestore
+        const isAdmin = await checkIfAdmin(user.email);
+
+        // Update UI
+        document.getElementById("user-email").textContent = `Signed in as: ${user.email}${isAdmin ? " (Admin)" : ""}`;
+        document.getElementById("sign-in-google").style.display = "none";
+        document.getElementById("sign-in-microsoft").style.display = "none";
+        document.getElementById("sign-out").style.display = "inline-block";
+
+        // Auto-fill form fields
+        document.getElementById("email").value = user.email;
+        if (user.displayName) {
+          const [firstName, ...rest] = user.displayName.split(" ");
+          const lastName = rest.join(" ");
+          document.getElementById("fname").value = firstName || "";
+          document.getElementById("lname").value = lastName || "";
+        }
+
+        loadBookings();
+      } else {
+        // Signed out
+        document.getElementById("sign-in-google").style.display = "inline-block";
+        document.getElementById("sign-in-microsoft").style.display = "inline-block";
+        document.getElementById("sign-out").style.display = "none";
+        document.getElementById("app-container").style.display = "none";
+      }
+    });
+
+
+
+
+    const rooms = ["Huddle Room 318", "Huddle Room 317", "Huddle Room 315", "Window Office", "Conference Room"];
+    const times = Array.from({ length: 22 }, (_, i) => {
+      const hour = 7 + Math.floor(i / 2);
+      const min = i % 2 === 0 ? "00" : "30";
+      return `${String(hour).padStart(2, "0")}:${min}`;
+    });
+
+    const grid = document.getElementById("grid");
+    const selectedSlots = [];
+    const nowEST = () => new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+
+    function updateClock() {
+      document.getElementById("clock").textContent = "Current EST Time: " + nowEST().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    let bookings = [];
+    let selectedDate = new Date().toISOString().split("T")[0];
+    let unbookingSlot = null;
+
+    document.getElementById("date-picker").value = selectedDate;
+    document.getElementById("date-picker").setAttribute("min", selectedDate);
+    document.getElementById("date-picker").addEventListener("change", e => {
+      selectedDate = e.target.value;
+      loadBookings();
+    });
+
+    function changeDate(offset) {
+      const current = new Date(selectedDate);
+      current.setDate(current.getDate() + offset);
+      const today = new Date().toISOString().split("T")[0];
+      const newDateStr = current.toISOString().split("T")[0];
+
+      if (newDateStr < today) return; // Block past
+      selectedDate = newDateStr;
+      document.getElementById("date-picker").value = selectedDate;
+      loadBookings();
+    }
+
+    function goToToday() {
+      const today = new Date().toISOString().split("T")[0];
+      selectedDate = today;
+      document.getElementById("date-picker").value = selectedDate;
+      loadBookings();
+    }
+
+
+
+    async function loadBookings() {
+      bookings = [];
+      const snapshot = await db.collection("bookings").where("date", "==", selectedDate).get();
+      snapshot.forEach(doc => bookings.push({ id: doc.id, ...doc.data() }));
+      drawGrid();
+    }
+
+    function formatTo12Hour(timeStr) {
+      const [hour, minute] = timeStr.split(":").map(Number);
+      const ampm = hour >= 12 ? "PM" : "AM";
+      const hour12 = ((hour + 11) % 12) + 1;
+      return `${hour12}:${minute.toString().padStart(2, '0')} ${ampm}`;
+    }
+
+    function drawGrid() {
+      grid.innerHTML = "";
+      grid.appendChild(document.createElement("div"));
+
+      times.forEach(time => {
+        const div = document.createElement("div");
+        div.className = "time-label";
+        div.textContent = formatTo12Hour(time);
+        grid.appendChild(div);
+      });
+
+
+      rooms.forEach((room, rIdx) => {
+        const roomDiv = document.createElement("div");
+        roomDiv.className = "room-label";
+        roomDiv.textContent = room;
+        grid.appendChild(roomDiv);
+
+        times.forEach((time, tIdx) => {
+          const id = `${rIdx}-${tIdx}`;
+          const div = document.createElement("div");
+          div.className = "slot";
+          div.dataset.id = id;
+
+          const [hour, min] = time.split(":");
+          const slotTime = new Date(`${selectedDate}T${hour}:${min}:00`);
+          const now = nowEST();
+          const isPast = new Date(selectedDate) < new Date(now.toISOString().split("T")[0]) || slotTime < now;
+          const match = bookings.find(b => b.room === room && b.time === time);
+
+          if (isPast) {
+            div.classList.add("past");
+            div.textContent = "Past";
+          } else if (match) {
+            const isMine = currentUser && match.email === currentUser.email;
+            div.classList.add("booked");
+
+            if (isMine) {
+              div.style.background = "orange";
+              div.title = `My Booking: ${match.name} (${match.reason})`;
+            } else {
+              div.title = `${match.name} (${match.reason})`;
+            }
+
+            div.onclick = () => {
+              selectedSlots.length = 0;
+              document.querySelectorAll(".selected").forEach(e => e.classList.remove("selected"));
+              unbookingSlot = match;
+              document.getElementById("unbooking-info").innerText =
+                `Date: ${match.date}
+      Time: ${match.time}
+      Name: ${match.name}
+      Reason: ${match.reason}
+      Room: ${match.room}
+      \n`;
+              document.getElementById("unbooking-form").style.display = "block";
+              document.getElementById("booking-form").style.display = "none";
+            };
+          }
+          else {
+            div.classList.add("available");
+            div.onclick = () => {
+              if (div.classList.contains("selected")) {
+                div.classList.remove("selected");
+                selectedSlots.splice(selectedSlots.indexOf(id), 1);
+              } else {
+                div.classList.add("selected");
+                selectedSlots.push(id);
+              }
+              document.getElementById("booking-form").style.display = selectedSlots.length ? "block" : "none";
+              document.getElementById("unbooking-form").style.display = "none";
+            };
+          }
+
+          grid.appendChild(div);
+        });
+      });
+    }
+
+    async function submitBooking() {
+      const fname = document.getElementById("fname").value.trim();
+      const lname = document.getElementById("lname").value.trim();
+      const email = document.getElementById("email").value.trim();
+      const reason = document.getElementById("reason").value.trim();
+      if (!fname || !lname || !email || !reason) {
+        alert("Please fill in all fields.");
+        return;
+      }
+
+      for (const id of selectedSlots) {
+        const [rIdx, tIdx] = id.split("-").map(Number);
+        await db.collection("bookings").add({
+          date: selectedDate,
+          room: rooms[rIdx],
+          time: times[tIdx],
+          name: `${fname} ${lname}`,
+          email,
+          reason
+        });
+      }
+
+      document.getElementById("fname").value = "";
+      document.getElementById("lname").value = "";
+      document.getElementById("email").value = "";
+      document.getElementById("reason").value = "";
+      selectedSlots.length = 0;
+      document.getElementById("booking-form").style.display = "none";
+      await loadBookings();
+    }
+
+    async function submitUnbooking() {
+      if (!currentUser || !unbookingSlot) {
+        alert("You must be signed in to unbook.");
+        return;
+      }
+
+      const isOwner = currentUser.email === unbookingSlot.email;
+
+      const isAdmin = await checkIfAdmin(currentUser.email); // force check here
+      if (isAdmin || isOwner) {
+        await db.collection("bookings").doc(unbookingSlot.id).delete();
+        unbookingSlot = null;
+        document.getElementById("unbooking-form").style.display = "none";
+        await loadBookings();
+      } else {
+        alert("You can only unbook your own reservations.");
+      }
+    }
+
+    function cancelUnbooking() {
+      document.getElementById("unbooking-form").style.display = "none";
+      unbookingSlot = null;
+    }
+
+    document.addEventListener("click", function (e) {
+      setTimeout(() => {
+        const bookingForm = document.getElementById("booking-form");
+
+        const clickedSlot = e.target.classList.contains("available");
+        const clickedInsideForm = bookingForm.contains(e.target);
+
+        if (bookingForm.style.display === "block" && !clickedSlot && !clickedInsideForm) {
+          selectedSlots.length = 0;
+          document.querySelectorAll(".selected").forEach(el => el.classList.remove("selected"));
+          bookingForm.style.display = "none";
+        }
+      }, 0);
+    });
+    const wrapper = document.getElementById("custom-date-wrapper");
+    const picker = document.getElementById("date-picker");
+
+    if (picker.showPicker) {
+      wrapper.addEventListener("click", () => {
+        picker.showPicker(); // Opens calendar popup
+      });
+    }
+
+    document.getElementById("sign-in-google").addEventListener("click", async () => {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      try {
+        await firebase.auth().signInWithPopup(provider);
+      } catch (error) {
+        alert("Google sign-in failed: " + error.message);
+      }
+    });
+
+    document.getElementById("sign-in-microsoft").addEventListener("click", async () => {
+      const provider = new firebase.auth.OAuthProvider('microsoft.com');
+      provider.setCustomParameters({ prompt: 'select_account' });
+      try {
+        await firebase.auth().signInWithPopup(provider);
+      } catch (error) {
+        alert("Microsoft sign-in failed: " + error.message);
+      }
+    });
+
+    document.getElementById("sign-out").addEventListener("click", async () => {
+      await firebase.auth().signOut();
+      location.reload(); // Optional: clears UI state and refreshes
+    });
+
+    document.addEventListener("click", function (e) {
+      setTimeout(() => {
+        const unbookingForm = document.getElementById("unbooking-form");
+        const clickedInsideForm = unbookingForm.contains(e.target);
+        const clickedBookedSlot = e.target.classList.contains("booked");
+
+        if (unbookingForm.style.display === "block" && !clickedInsideForm && !clickedBookedSlot) {
+          cancelUnbooking();
+        }
+      }, 0);
+    });
+
+  </script>
+</body>
+
+</html>
